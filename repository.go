@@ -74,6 +74,14 @@ func (r *Repository[T]) Get(ctx context.Context, key string) (*T, error) {
 		}
 	}
 
+	// Execute after find hook
+	if hook, ok := any(&entity).(gpa.AfterFindHook); ok {
+		if err := hook.AfterFind(ctx); err != nil {
+			// Log error but don't fail the operation
+			// log.Printf("after find hook failed: %v", err)
+		}
+	}
+
 	return &entity, nil
 }
 
@@ -85,9 +93,48 @@ func (r *Repository[T]) Set(ctx context.Context, key string, value *T) error {
 
 // DeleteKey removes a key-value pair.
 func (r *Repository[T]) DeleteKey(ctx context.Context, key string) error {
+	// First, try to get the entity to run hooks on it
+	entity, err := r.Get(ctx, key)
+	if err != nil {
+		// If we can't get the entity, still proceed with deletion
+		// This handles the case where the key doesn't exist
+		if gpaErr, ok := err.(gpa.GPAError); ok && gpaErr.Type == gpa.ErrorTypeNotFound {
+			// Key doesn't exist, nothing to delete
+			return nil
+		}
+		// For other errors, we still try to delete
+	}
+
+	// Execute before delete hook if we have the entity
+	if entity != nil {
+		if hook, ok := any(entity).(gpa.BeforeDeleteHook); ok {
+			if err := hook.BeforeDelete(ctx); err != nil {
+				return gpa.GPAError{
+					Type:    gpa.ErrorTypeValidation,
+					Message: "before delete hook failed",
+					Cause:   err,
+				}
+			}
+		}
+	}
+
 	fullKey := r.buildKey(key)
 	result := r.client.Del(ctx, fullKey)
-	return convertRedisError(result.Err())
+	if err := convertRedisError(result.Err()); err != nil {
+		return err
+	}
+
+	// Execute after delete hook if we have the entity
+	if entity != nil {
+		if hook, ok := any(entity).(gpa.AfterDeleteHook); ok {
+			if err := hook.AfterDelete(ctx); err != nil {
+				// Log error but don't fail the operation
+				// log.Printf("after delete hook failed: %v", err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // KeyExists checks if a key exists in the store.
@@ -198,6 +245,17 @@ func (r *Repository[T]) MDelete(ctx context.Context, keys []string) (int64, erro
 
 // SetWithTTL stores a value with an expiration time and compile-time type safety.
 func (r *Repository[T]) SetWithTTL(ctx context.Context, key string, value *T, ttl time.Duration) error {
+	// Execute before create hook
+	if hook, ok := any(value).(gpa.BeforeCreateHook); ok {
+		if err := hook.BeforeCreate(ctx); err != nil {
+			return gpa.GPAError{
+				Type:    gpa.ErrorTypeValidation,
+				Message: "before create hook failed",
+				Cause:   err,
+			}
+		}
+	}
+
 	fullKey := r.buildKey(key)
 	
 	data, err := json.Marshal(value)
@@ -209,7 +267,19 @@ func (r *Repository[T]) SetWithTTL(ctx context.Context, key string, value *T, tt
 		}
 	}
 
-	return convertRedisError(r.client.Set(ctx, fullKey, data, ttl).Err())
+	if err := convertRedisError(r.client.Set(ctx, fullKey, data, ttl).Err()); err != nil {
+		return err
+	}
+
+	// Execute after create hook
+	if hook, ok := any(value).(gpa.AfterCreateHook); ok {
+		if err := hook.AfterCreate(ctx); err != nil {
+			// Log error but don't fail the operation
+			// log.Printf("after create hook failed: %v", err)
+		}
+	}
+
+	return nil
 }
 
 // Expire sets or updates the TTL for an existing key.

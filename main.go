@@ -16,7 +16,7 @@ import (
 // Provider Implementation
 // =====================================
 
-// Provider implements gpa.Provider using Redis
+// Provider implements gpa.Provider and gpa.KeyValueProvider using Redis
 type Provider struct {
 	client *redis.Client
 	config gpa.Config
@@ -97,6 +97,54 @@ func (p *Provider) ProviderInfo() gpa.ProviderInfo {
 // This enables the unified provider API: userRepo := gparedis.GetRepository[User](provider)
 func GetRepository[T any](p *Provider) gpa.Repository[T] {
 	return NewRepository[T](p, p.client, "")
+}
+
+// =====================================
+// KeyValueProvider Implementation
+// =====================================
+
+// Client returns the underlying Redis client instance
+func (p *Provider) Client() interface{} {
+	return p.client
+}
+
+// Set stores a key-value pair with optional TTL
+func (p *Provider) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
+	if ttl > 0 {
+		return p.client.Set(ctx, key, value, ttl).Err()
+	}
+	return p.client.Set(ctx, key, value, 0).Err()
+}
+
+// Get retrieves a value by key
+func (p *Provider) Get(ctx context.Context, key string) (interface{}, error) {
+	return p.client.Get(ctx, key).Result()
+}
+
+// Delete removes a key
+func (p *Provider) Delete(ctx context.Context, key string) error {
+	return p.client.Del(ctx, key).Err()
+}
+
+// Exists checks if a key exists
+func (p *Provider) Exists(ctx context.Context, key string) (bool, error) {
+	count, err := p.client.Exists(ctx, key).Result()
+	return count > 0, err
+}
+
+// Keys returns all keys matching a pattern
+func (p *Provider) Keys(ctx context.Context, pattern string) ([]string, error) {
+	return p.client.Keys(ctx, pattern).Result()
+}
+
+// Expire sets TTL for a key
+func (p *Provider) Expire(ctx context.Context, key string, ttl time.Duration) error {
+	return p.client.Expire(ctx, key, ttl).Err()
+}
+
+// TTL returns the remaining TTL for a key
+func (p *Provider) TTL(ctx context.Context, key string) (time.Duration, error) {
+	return p.client.TTL(ctx, key).Result()
 }
 
 
