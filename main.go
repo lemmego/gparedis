@@ -95,7 +95,7 @@ func (p *Provider) ProviderInfo() gpa.ProviderInfo {
 
 // GetRepository returns a type-safe repository for any entity type T
 // This enables the unified provider API: userRepo := gparedis.GetRepository[User](provider)
-func GetRepository[T any](p *Provider) gpa.Repository[T] {
+func GetRepository[T any](p *Provider) gpa.AdvancedKeyValueRepository[T] {
 	return NewRepository[T](p, p.client, "")
 }
 
