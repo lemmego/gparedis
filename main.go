@@ -4,6 +4,7 @@ package gparedis
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -154,53 +155,50 @@ func (p *Provider) TTL(ctx context.Context, key string) (time.Duration, error) {
 
 // buildRedisOptions creates Redis connection options from GPA config
 func buildRedisOptions(config gpa.Config) (*redis.Options, error) {
-	opts := &redis.Options{}
+	opts := &redis.Options{
+		Addr: "localhost:6379", // Default
+		DB:   0,                 // Default
+	}
 
 	// Parse connection URL if provided
 	if config.ConnectionURL != "" {
-		opts.Addr = "localhost:6379" // Default
-		opts.DB = 0                  // Default
-
-		// Simple URL parsing for redis://[username:password@]host[:port][/db]
-		url := config.ConnectionURL
-		if strings.HasPrefix(url, "redis://") {
-			url = strings.TrimPrefix(url, "redis://")
+		// Use net/url for proper URL parsing
+		u, err := url.Parse(config.ConnectionURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid Redis URL: %w", err)
 		}
 
-		// Split by @ to separate auth from host
-		parts := strings.Split(url, "@")
-		var hostPart string
-		if len(parts) == 2 {
-			// Has auth
-			authPart := parts[0]
-			hostPart = parts[1]
-			
-			// Parse username:password
-			if strings.Contains(authPart, ":") {
-				authParts := strings.Split(authPart, ":")
-				opts.Username = authParts[0]
-				opts.Password = authParts[1]
-			} else {
-				opts.Password = authPart
-			}
-		} else {
-			hostPart = parts[0]
+		// Validate that the URL has a host or scheme
+		// A valid Redis URL should have either:
+		// 1. A scheme (redis://) and a host, or
+		// 2. At least a host (for host:port format)
+		if u.Scheme == "" && u.Host == "" && u.Path == config.ConnectionURL {
+			// This looks like it was parsed as a path, not a proper URL
+			return nil, fmt.Errorf("invalid Redis URL format: %s", config.ConnectionURL)
 		}
 
-		// Parse host:port/db
-		if strings.Contains(hostPart, "/") {
-			hostDbParts := strings.Split(hostPart, "/")
-			hostPart = hostDbParts[0]
-			if len(hostDbParts) > 1 && hostDbParts[1] != "" {
-				if db, err := strconv.Atoi(hostDbParts[1]); err == nil {
-					opts.DB = db
-				}
+		// Set host and port from URL
+		if u.Host != "" {
+			opts.Addr = u.Host
+		}
+
+		// Parse username and password from URL
+		if u.User != nil {
+			opts.Username = u.User.Username()
+			if password, ok := u.User.Password(); ok {
+				opts.Password = password
 			}
 		}
 
-		// Set address
-		if hostPart != "" {
-			opts.Addr = hostPart
+		// Parse database number from URL path
+		// Path format: /db_number
+		if u.Path != "" && u.Path != "/" {
+			dbStr := strings.TrimPrefix(u.Path, "/")
+			if db, err := strconv.Atoi(dbStr); err == nil {
+				opts.DB = db
+			}
+			// If parsing fails, just use default (0) and ignore the error
+			// The redis client will validate the connection anyway
 		}
 	} else {
 		// Use individual parameters
@@ -215,7 +213,7 @@ func buildRedisOptions(config gpa.Config) (*redis.Options, error) {
 		opts.Addr = fmt.Sprintf("%s:%d", host, port)
 		opts.Username = config.Username
 		opts.Password = config.Password
-		
+
 		// Parse database number
 		if config.Database != "" {
 			if db, err := strconv.Atoi(config.Database); err == nil {
