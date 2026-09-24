@@ -2,6 +2,7 @@ package gparedis
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -33,13 +34,14 @@ func setupTestRepository(t *testing.T) (*Repository[TestValue], func()) {
 		t.Skipf("Skipping Redis tests: %v", err)
 	}
 
-	// Clear the test database
-	provider.client.FlushDB(context.Background())
-
-	repo := NewRepository[TestValue](provider, provider.client, "")
+	prefix := fmt.Sprintf("gparedis:test:%d:", time.Now().UnixNano())
+	repo := NewRepository[TestValue](provider, provider.client, prefix)
 
 	cleanup := func() {
-		provider.client.FlushDB(context.Background())
+		keys, _ := provider.client.Keys(context.Background(), prefix+"*").Result()
+		if len(keys) > 0 {
+			provider.client.Del(context.Background(), keys...)
+		}
 		provider.Close()
 	}
 

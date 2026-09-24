@@ -19,13 +19,27 @@ import (
 
 // Provider implements gpa.Provider and gpa.KeyValueProvider using Redis
 type Provider struct {
-	client *redis.Client
-	config gpa.Config
+	client              *redis.Client
+	config              gpa.Config
+	repositoryKeyPrefix string
+}
+
+// DefaultRepositoryKeyPrefix is used by repositories created through a
+// Provider when no prefix is configured.
+const DefaultRepositoryKeyPrefix = "gparedis:"
+
+// Repository creates a type-safe repository from this provider instance.
+func (p *Provider) Repository[T any]() gpa.BasicKeyValueRepository[T] {
+	return NewRepository[T](p, p.client, p.repositoryKeyPrefix)
 }
 
 // NewProvider creates a new Redis provider instance
 func NewProvider(config gpa.Config) (*Provider, error) {
-	provider := &Provider{config: config}
+	keyPrefix, err := repositoryKeyPrefix(config)
+	if err != nil {
+		return nil, err
+	}
+	provider := &Provider{config: config, repositoryKeyPrefix: keyPrefix}
 
 	// Build Redis connection options
 	opts, err := buildRedisOptions(config)
@@ -57,7 +71,12 @@ func NewProvider(config gpa.Config) (*Provider, error) {
 
 // Configure applies configuration to the provider
 func (p *Provider) Configure(config gpa.Config) error {
+	keyPrefix, err := repositoryKeyPrefix(config)
+	if err != nil {
+		return err
+	}
 	p.config = config
+	p.repositoryKeyPrefix = keyPrefix
 	return nil
 }
 
@@ -97,7 +116,24 @@ func (p *Provider) ProviderInfo() gpa.ProviderInfo {
 // GetRepository returns a type-safe repository for any entity type T
 // This enables the unified provider API: userRepo := gparedis.GetRepository[User](provider)
 func GetRepository[T any](p *Provider) gpa.AdvancedKeyValueRepository[T] {
-	return NewRepository[T](p, p.client, "")
+	return NewRepository[T](p, p.client, p.repositoryKeyPrefix)
+}
+
+func repositoryKeyPrefix(config gpa.Config) (string, error) {
+	prefix := DefaultRepositoryKeyPrefix
+	if options, ok := config.Options["redis"].(map[string]interface{}); ok {
+		if configured, exists := options["key_prefix"]; exists {
+			value, ok := configured.(string)
+			if !ok {
+				return "", fmt.Errorf("redis key_prefix must be a string")
+			}
+			if strings.TrimSpace(value) == "" {
+				return "", fmt.Errorf("redis key_prefix must not be empty or whitespace")
+			}
+			prefix = value
+		}
+	}
+	return prefix, nil
 }
 
 // =====================================
@@ -148,7 +184,6 @@ func (p *Provider) TTL(ctx context.Context, key string) (time.Duration, error) {
 	return p.client.TTL(ctx, key).Result()
 }
 
-
 // =====================================
 // Helper Functions for Tests
 // =====================================
@@ -157,7 +192,7 @@ func (p *Provider) TTL(ctx context.Context, key string) (time.Duration, error) {
 func buildRedisOptions(config gpa.Config) (*redis.Options, error) {
 	opts := &redis.Options{
 		Addr: "localhost:6379", // Default
-		DB:   0,                 // Default
+		DB:   0,                // Default
 	}
 
 	// Parse connection URL if provided
