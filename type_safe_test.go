@@ -221,11 +221,24 @@ func TestGenericRedisRepository(t *testing.T) {
 		assert.Contains(t, userKeys, "pattern_user:1")
 		assert.Contains(t, userKeys, "pattern_user:2")
 
-		// Test Scan pattern matching - just check it returns results
-		allKeys, _, err := patternRepo.Scan(ctx, 0, "pattern_*", 10)
-		require.NoError(t, err)
-		// Redis scan may return results in batches, so just verify we get some results
-		assert.GreaterOrEqual(t, len(allKeys), 1) // Should have at least some keys
+		// SCAN is a cursor, so it is iterated to completion rather than
+		// sampled. The previous version of this called it once with COUNT 10
+		// and asserted it had found something, under a comment admitting that
+		// scan returns results in batches — which is the same thing as
+		// admitting one call may legitimately return none. It returned zero
+		// against miniredis and the test failed, for the one reason the
+		// comment had already written down.
+		var allKeys []string
+		for cursor := uint64(0); ; {
+			batch, next, err := patternRepo.Scan(ctx, cursor, "pattern_*", 10)
+			require.NoError(t, err)
+			allKeys = append(allKeys, batch...)
+			if next == 0 {
+				break
+			}
+			cursor = next
+		}
+		assert.Len(t, allKeys, 3)
 
 		// Clean up
 		_, err = patternRepo.MDelete(ctx, []string{"pattern_user:1", "pattern_user:2", "pattern_admin:1"})
